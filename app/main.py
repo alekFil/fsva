@@ -37,7 +37,10 @@ def process_video_inference(video_file, json_file, start_frame, end_frame):
         return str(e)
 
     reels_processor = ReelsProcessor(temp_video_path, video_fps=24)
-    processed_video = reels_processor.process_jumps([(start_frame, end_frame)])
+    processed_video = reels_processor.process_jumps(
+        [(start_frame, end_frame)],
+        landmarks_tensor,
+    )
 
     print("Обработанное видео сохранено как:", processed_video)
 
@@ -67,8 +70,8 @@ if __name__ == "__main__":
                     label="Загрузите landmarks_data (JSON)",
                     file_types=[".json"],
                 )
-                start_frame = gr.Number(label="Начальный кадр", value=190)
-                end_frame = gr.Number(label="Конечный кадр", value=210)
+                start_frame = gr.Number(label="Начальный кадр", value=570)
+                end_frame = gr.Number(label="Конечный кадр", value=630)
 
                 # Кнопка запуска
                 run_button = gr.Button("Запустить обработку", interactive=False)

@@ -235,6 +235,7 @@ class ReelsProcessor:
         smooth_window=10,
         padding=200,
         draw_mode="Trajectory",
+        progress=None,
     ):
         # Применяем интерполяцию для замены нулевых значений в landmarks_tensor
         landmarks_tensor = self.interpolate_landmarks(landmarks_tensor)
@@ -260,7 +261,11 @@ class ReelsProcessor:
 
         for start_frame, end_frame in jump_frames:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            for frame_idx in tqdm(range(start_frame, end_frame + 1)):
+
+            for frame_idx in tqdm(
+                range(start_frame, end_frame + 1),
+                desc="Отрисовка видео",
+            ):
                 ret, frame = cap.read()
                 if not ret:
                     break

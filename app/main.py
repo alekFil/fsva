@@ -55,6 +55,7 @@ def process_video_inference(
     draw_mode,
     step,
     model_choice,
+    progress=gr.Progress(track_tqdm=True),
 ):
     # Проверяем наличие загруженных файлов
     if video_file is None:

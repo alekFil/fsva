@@ -9,7 +9,9 @@ from utils.reels_processor import ReelsProcessor
 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-def process_video_inference(video_file, json_file, start_frame, end_frame):
+def process_video_inference(
+    video_file, json_file, start_frame, end_frame, padding, draw_mode
+):
     # Проверяем наличие загруженных файлов
     if video_file is None or json_file is None:
         return "Пожалуйста, загрузите видео и JSON файл."
@@ -40,6 +42,8 @@ def process_video_inference(video_file, json_file, start_frame, end_frame):
     processed_video = reels_processor.process_jumps(
         [(start_frame, end_frame)],
         landmarks_tensor,
+        padding=padding,
+        draw_mode=draw_mode,
     )
 
     print("Обработанное видео сохранено как:", processed_video)
@@ -72,6 +76,14 @@ if __name__ == "__main__":
                 )
                 start_frame = gr.Number(label="Начальный кадр", value=570)
                 end_frame = gr.Number(label="Конечный кадр", value=630)
+                padding = gr.Number(label="Padding (отступ для кропа)", value=0)
+
+                # Переключатель режима отрисовки
+                draw_mode = gr.Radio(
+                    label="Выберите режим отрисовки",
+                    choices=["Skeleton", "Trajectory", "Без отрисовки"],
+                    value="Без отрисовки",
+                )
 
                 # Кнопка запуска
                 run_button = gr.Button("Запустить обработку", interactive=False)
@@ -84,12 +96,20 @@ if __name__ == "__main__":
                     label="Обработанное видео",
                     width=360,
                     height=640,
+                    autoplay=True,
                 )
 
         # Настраиваем кнопку запуска, чтобы она выводила GIF в соседний столбец
         run_button.click(
             process_video_inference,
-            inputs=[video_input, json_input, start_frame, end_frame],
+            inputs=[
+                video_input,
+                json_input,
+                start_frame,
+                end_frame,
+                padding,
+                draw_mode,
+            ],
             outputs=video_output,
         )
 

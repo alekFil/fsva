@@ -21,6 +21,43 @@ class ReelsProcessor:
         self.video_fps = video_fps
         self.temp_files = []
         self.temp_dir = tempfile.mkdtemp()  # Временная директория для кадров
+        self.skeleton_connections = [
+            (0, 2),
+            (0, 5),
+            (2, 7),
+            (5, 8),
+            (5, 4),
+            (5, 6),
+            (2, 1),
+            (2, 3),
+            (10, 9),
+            (11, 12),
+            (12, 14),
+            (14, 16),
+            (16, 22),
+            (16, 20),
+            (20, 18),
+            (18, 16),
+            (11, 13),
+            (13, 15),
+            (15, 21),
+            (15, 19),
+            (19, 17),
+            (17, 15),
+            (12, 24),
+            (11, 23),
+            (23, 24),
+            (24, 26),
+            (26, 28),
+            (28, 30),
+            (30, 32),
+            (32, 28),
+            (23, 25),
+            (25, 27),
+            (27, 29),
+            (29, 31),
+            (31, 27),
+        ]
 
     def interpolate_landmarks(self, landmarks_tensor):
         """
@@ -67,26 +104,96 @@ class ReelsProcessor:
         return landmarks_tensor
 
     def draw_trajectory(
-        self, frame, center_points, point_color=(0, 0, 255), line_color=(0, 255, 0)
+        self,
+        frame,
+        center_points,
+        point_color=(0, 0, 255),
+        line_color=(0, 255, 0),
+        interpolation_factor=1,
     ):
         """
-        Рисует центральную точку и траекторию на кадре.
+        Рисует центральную точку и сглаженную траекторию на кадре.
 
         Параметры:
         - frame: текущий кадр видео.
         - center_points: список координат центральной точки на каждом кадре.
         - point_color: цвет центральной точки в формате BGR (по умолчанию красный).
         - line_color: цвет линии траектории в формате BGR (по умолчанию зеленый).
+        - interpolation_factor: фактор интерполяции для создания дополнительных точек.
 
         Возвращает:
         - frame: кадр с нарисованной траекторией.
         """
-        for i, point in enumerate(center_points):
+        if len(center_points) > 1:
+            # Разделение координат x и y для интерполяции
+            x_points = [p[0] for p in center_points]
+            y_points = [p[1] for p in center_points]
+
+            # Создаем параметрическое представление данных для интерполяции
+            t = np.arange(len(center_points))
+            t_interpolated = np.linspace(
+                0, len(center_points) - 1, len(center_points) * interpolation_factor
+            )
+
+            # Интерполяция координат x и y
+            x_smooth = np.interp(t_interpolated, t, x_points)
+            y_smooth = np.interp(t_interpolated, t, y_points)
+
+            # Формируем сглаженные точки в формате, подходящем для cv2.polylines
+            smooth_points = np.array(
+                [[[int(x), int(y)] for x, y in zip(x_smooth, y_smooth)]], dtype=np.int32
+            )
+
+            # Рисуем сглаженную траекторию
+            cv2.polylines(
+                frame, smooth_points, isClosed=False, color=line_color, thickness=2
+            )
+
+        # Рисуем центральные точки для наглядности
+        for point in center_points:
             cv2.circle(frame, point, 5, point_color, -1)  # Рисуем центральную точку
-            if i > 0:
-                cv2.line(
-                    frame, center_points[i - 1], point, line_color, 2
-                )  # Рисуем линию траектории
+
+        return frame
+
+    def draw_skeleton(
+        self,
+        frame,
+        joints,
+        point_color=(0, 255, 0),
+        line_color=(255, 0, 0),
+    ):
+        """
+        Рисует скелет, соединяя точки суставов в кадре.
+
+        Параметры:
+        - frame: текущий кадр видео.
+        - joints: тензор координат суставов для одного кадра, размер (33, 3), где joints[i] = (x, y, z) для сустава i.
+        - connections: список кортежей, указывающих, какие суставы нужно соединить.
+        - point_color: цвет точек суставов в формате BGR.
+        - line_color: цвет линий, соединяющих суставы, в формате BGR.
+
+        Возвращает:
+        - frame: кадр с нарисованным скелетом.
+        """
+        height, width = frame.shape[:2]  # Получаем размеры кадра
+
+        print(f"{joints=}")
+        # Преобразуем тензор в формат NumPy, оставляем только координаты x и y и масштабируем их
+        joints_np = joints[:, :2].astype(int)
+        print(f"{joints_np=}")
+
+        # Отрисовка соединений между суставами
+        for start_idx, end_idx in self.skeleton_connections:
+            if start_idx < len(joints_np) and end_idx < len(joints_np):
+                start_point = tuple(joints_np[start_idx])
+                end_point = tuple(joints_np[end_idx])
+                # Рисуем линию между суставами
+                cv2.line(frame, start_point, end_point, line_color, 2)
+
+        # Отрисовка точек суставов
+        for joint in joints_np:
+            cv2.circle(frame, tuple(joint), 5, point_color, -1)
+
         return frame
 
     def process_jumps(
@@ -95,6 +202,7 @@ class ReelsProcessor:
         landmarks_tensor,
         smooth_window=10,
         padding=200,
+        draw_mode="Trajectory",
     ):
         # Применяем интерполяцию для замены нулевых значений в landmarks_tensor
         landmarks_tensor = self.interpolate_landmarks(landmarks_tensor)
@@ -163,14 +271,6 @@ class ReelsProcessor:
                 # Обновляем список центральных точек для кропнутого кадра
                 cropped_center_points = [(x - x1, y - y1) for x, y in center_points]
 
-                # Рисуем центральную точку и траекторию на кропнутом кадре
-                cropped_frame = self.draw_trajectory(
-                    cropped_frame,
-                    cropped_center_points,
-                    point_color=(102, 153, 0),
-                    line_color=(102, 153, 0),
-                )
-
                 # Получаем исходные координаты руки и корректируем их относительно кропа
                 original_hand_x = int(landmarks_tensor[frame_idx // 3, 0, 0] * width)
                 original_hand_y = int(landmarks_tensor[frame_idx // 3, 0, 1] * height)
@@ -179,13 +279,32 @@ class ReelsProcessor:
                 # Обновляем список точек руки для кропнутого кадра
                 cropped_hand_points = [(x - x1, y - y1) for x, y in hand_points]
 
-                # Рисуем траекторию руки на кропнутом кадре
-                cropped_frame = self.draw_trajectory(
-                    cropped_frame,
-                    cropped_hand_points,
-                    point_color=(0, 102, 153),
-                    line_color=(0, 102, 153),
-                )
+                if draw_mode == "Trajectory":
+                    # Рисуем центральную точку и траекторию на кропнутом кадре
+                    cropped_frame = self.draw_trajectory(
+                        cropped_frame,
+                        cropped_center_points,
+                        point_color=(102, 153, 0),
+                        line_color=(102, 153, 0),
+                    )
+
+                    # Рисуем траекторию руки на кропнутом кадре
+                    cropped_frame = self.draw_trajectory(
+                        cropped_frame,
+                        cropped_hand_points,
+                        point_color=(0, 102, 153),
+                        line_color=(0, 102, 153),
+                    )
+                elif draw_mode == "Skeleton":
+                    # Пересчитываем координаты суставов для кропнутого кадра
+                    joints = (
+                        landmarks_tensor[frame_idx // 3, :, :2]
+                        * np.array([width, height])
+                    ).numpy()
+                    cropped_joints = np.array(
+                        [(int(x - x1), int(y - y1)) for x, y in joints]
+                    )
+                    cropped_frame = self.draw_skeleton(cropped_frame, cropped_joints)
 
                 # Сохраняем кропнутый кадр в виде изображения
                 frame_path = os.path.join(self.temp_dir, f"frame_{frame_count:05d}.png")
@@ -212,10 +331,19 @@ class ReelsProcessor:
             ]
         )
 
+        # Применяем fade-in и fade-out к финальному видео
+        faded_output_path = "processed_video_with_fade.mp4"
+        self.apply_fade_effect(
+            output_video_path,
+            faded_output_path,
+            fade_in_duration=1,
+            fade_out_duration=1,
+        )
+
         # Очистка временных файлов
         self.cleanup_temp_files()
 
-        return output_video_path
+        return faded_output_path
 
     def cut_video_segment(self, start_time, end_time, output_path):
         command = [
@@ -239,7 +367,11 @@ class ReelsProcessor:
         self.temp_files.append(output_path)
 
     def apply_fade_effect(
-        self, input_path, output_path, fade_in_duration=0.5, fade_out_duration=0.5
+        self,
+        input_path,
+        output_path,
+        fade_in_duration=0.5,
+        fade_out_duration=0.5,
     ):
         probe = subprocess.run(
             [

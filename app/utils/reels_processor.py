@@ -196,6 +196,32 @@ class ReelsProcessor:
 
         return frame
 
+    def fit_to_aspect_ratio_9_16(self, frame, crop_frame):
+        """
+        Вписывает обрезанное видео в фон 9:16, заполняя сверху и снизу размытым видео.
+
+        Параметры:
+        - frame: исходный кадр видео.
+        - crop_frame: обрезанный кадр с паддингом.
+
+        Возвращает:
+        - output_frame: кадр 9:16 с размытым фоном.
+        """
+        # Размеры целевого фона (9:16)
+        target_width = crop_frame.shape[1]
+        target_height = int(target_width * (16 / 9))
+
+        # Изменяем размер фона
+        blurred_background = cv2.resize(frame, (target_width, target_height))
+        blurred_background = cv2.GaussianBlur(blurred_background, (51, 51), 0)
+
+        # Позиционируем обрезанный кадр по центру на фоне 9:16
+        y_offset = (target_height - crop_frame.shape[0]) // 2
+        output_frame = blurred_background.copy()
+        output_frame[y_offset : y_offset + crop_frame.shape[0], :] = crop_frame
+
+        return output_frame
+
     def process_jumps(
         self,
         jump_frames,
@@ -306,9 +332,15 @@ class ReelsProcessor:
                     )
                     cropped_frame = self.draw_skeleton(cropped_frame, cropped_joints)
 
+                # Вписываем обрезанный кадр в размытую версию
+                if padding != 0:
+                    output_frame = self.fit_to_aspect_ratio_9_16(frame, cropped_frame)
+                else:
+                    output_frame = cropped_frame
+
                 # Сохраняем кропнутый кадр в виде изображения
                 frame_path = os.path.join(self.temp_dir, f"frame_{frame_count:05d}.png")
-                cv2.imwrite(frame_path, cropped_frame)
+                cv2.imwrite(frame_path, output_frame)
                 frame_count += 1
 
         cap.release()

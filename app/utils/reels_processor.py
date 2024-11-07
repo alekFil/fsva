@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 
 class ReelsProcessor:
-    def __init__(self, input_video, video_fps=25):
+    def __init__(self, input_video, video_fps=25, step=1):
         """
         Инициализация процессора видео.
 
@@ -21,6 +21,7 @@ class ReelsProcessor:
         self.video_fps = video_fps
         self.temp_files = []
         self.temp_dir = tempfile.mkdtemp()  # Временная директория для кадров
+        self.step = step
         self.skeleton_connections = [
             (0, 2),
             (0, 5),
@@ -177,10 +178,8 @@ class ReelsProcessor:
         """
         height, width = frame.shape[:2]  # Получаем размеры кадра
 
-        print(f"{joints=}")
         # Преобразуем тензор в формат NumPy, оставляем только координаты x и y и масштабируем их
         joints_np = joints[:, :2].astype(int)
-        print(f"{joints_np=}")
 
         # Отрисовка соединений между суставами
         for start_idx, end_idx in self.skeleton_connections:
@@ -219,6 +218,13 @@ class ReelsProcessor:
         y_offset = (target_height - crop_frame.shape[0]) // 2
         output_frame = blurred_background.copy()
         output_frame[y_offset : y_offset + crop_frame.shape[0], :] = crop_frame
+
+        # Проверяем размеры на кратность 2 и корректируем, если необходимо
+        height, width = output_frame.shape[:2]
+        if height % 2 != 0 or width % 2 != 0:
+            new_height = height if height % 2 == 0 else height + 1
+            new_width = width if width % 2 == 0 else width + 1
+            output_frame = cv2.resize(output_frame, (new_width, new_height))
 
         return output_frame
 
@@ -262,16 +268,16 @@ class ReelsProcessor:
                 # Получаем исходные координаты центральной точки из landmarks_tensor
                 original_center_x = int(
                     (
-                        landmarks_tensor[frame_idx // 3, 23, 0]
-                        + landmarks_tensor[frame_idx // 3, 24, 0]
+                        landmarks_tensor[frame_idx // self.step, 23, 0]
+                        + landmarks_tensor[frame_idx // self.step, 24, 0]
                     )
                     / 2
                     * width
                 )
                 original_center_y = int(
                     (
-                        landmarks_tensor[frame_idx // 3, 23, 1]
-                        + landmarks_tensor[frame_idx // 3, 24, 1]
+                        landmarks_tensor[frame_idx // self.step, 23, 1]
+                        + landmarks_tensor[frame_idx // self.step, 24, 1]
                     )
                     / 2
                     * height
@@ -298,8 +304,12 @@ class ReelsProcessor:
                 cropped_center_points = [(x - x1, y - y1) for x, y in center_points]
 
                 # Получаем исходные координаты руки и корректируем их относительно кропа
-                original_hand_x = int(landmarks_tensor[frame_idx // 3, 0, 0] * width)
-                original_hand_y = int(landmarks_tensor[frame_idx // 3, 0, 1] * height)
+                original_hand_x = int(
+                    landmarks_tensor[frame_idx // self.step, 0, 0] * width
+                )
+                original_hand_y = int(
+                    landmarks_tensor[frame_idx // self.step, 0, 1] * height
+                )
                 hand_points.append((original_hand_x, original_hand_y))
 
                 # Обновляем список точек руки для кропнутого кадра
@@ -323,10 +333,9 @@ class ReelsProcessor:
                     )
                 elif draw_mode == "Skeleton":
                     # Пересчитываем координаты суставов для кропнутого кадра
-                    joints = (
-                        landmarks_tensor[frame_idx // 3, :, :2]
-                        * np.array([width, height])
-                    ).numpy()
+                    joints = landmarks_tensor[frame_idx // self.step, :, :2] * np.array(
+                        [width, height]
+                    )
                     cropped_joints = np.array(
                         [(int(x - x1), int(y - y1)) for x, y in joints]
                     )
@@ -419,10 +428,21 @@ class ReelsProcessor:
             capture_output=True,
             text=True,
         )
-        duration = float(probe.stdout.strip())
 
-        fade_in_duration = min(0.2 * duration, 0.5)
-        fade_out_duration = min(0.2 * duration, 0.5)
+        if probe.returncode != 0:
+            # Отладочное сообщение в случае ошибки выполнения ffprobe
+            print("Ошибка при выполнении ffprobe:", probe.stderr)
+            raise RuntimeError("ffprobe не смог получить длительность видео.")
+
+        try:
+            duration = float(probe.stdout.strip())
+        except ValueError:
+            # Отладочное сообщение, если результат пустой или не является числом
+            print(
+                "Не удалось получить длительность видео. " "Вывод ffprobe:",
+                probe.stdout,
+            )
+            raise ValueError("Не удалось конвертировать вывод ffprobe в число.")
 
         command = [
             "ffmpeg",

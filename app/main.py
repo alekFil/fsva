@@ -1,12 +1,10 @@
 import asyncio
 import shutil
-import signal
-import sys
 import tempfile
 
 import gradio as gr
-from utils.animation_creator import AnimationCreator
 from utils.landarks_converter import LandmarksConverter
+from utils.reels_processor import ReelsProcessor
 
 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -35,25 +33,15 @@ def process_video_inference(video_file, json_file, start_frame, end_frame):
         if start_frame >= end_frame:
             raise ValueError("Начальный кадр должен быть меньше конечного")
     except ValueError as e:
-        return str(e)  # Возвращаем ошибку, если диапазон некорректен
+        # Возвращаем ошибку, если диапазон некорректен
+        return str(e)
 
-    processor = AnimationCreator(
-        video_path=temp_video_path,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        image_shape=(1920, 1080),
-    )
-    processor.process_video(landmarks_tensor, "output1.gif")
+    reels_processor = ReelsProcessor(temp_video_path, video_fps=24)
+    processed_video = reels_processor.process_jumps([(start_frame, end_frame)])
 
-    # reels_processor = ReelsProcessor(temp_video_path, video_fps=24)
-    # processed_video = reels_processor.process_jumps([(start_frame, end_frame)])
+    print("Обработанное видео сохранено как:", processed_video)
 
-    # print("Обработанное видео сохранено как:", processed_video)
-
-    # Задаем фиктивный выход, пока анимация не реализована
-    output_gifs = "output1.gif"
-
-    return output_gifs
+    return processed_video
 
 
 def enable_button(video_file, json_file):
@@ -61,15 +49,7 @@ def enable_button(video_file, json_file):
     return gr.update(interactive=bool(video_file and json_file))
 
 
-def signal_handler(sig, frame):
-    print("Завершение работы Gradio...")
-    sys.exit(0)
-
-
 if __name__ == "__main__":
-    # Устанавливаем обработчик сигналов для корректного завершения
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
     # Gradio Interface
     with gr.Blocks() as fsva:
         gr.Markdown(
@@ -97,13 +77,17 @@ if __name__ == "__main__":
                 json_input.change(enable_button, [video_input, json_input], run_button)
 
             with gr.Column():
-                gif_output = gr.Image(label="GIF", height=640, width=360)
+                video_output = gr.Video(
+                    label="Обработанное видео",
+                    width=640,
+                    height=360,
+                )
 
         # Настраиваем кнопку запуска, чтобы она выводила GIF в соседний столбец
         run_button.click(
             process_video_inference,
             inputs=[video_input, json_input, start_frame, end_frame],
-            outputs=gif_output,
+            outputs=video_output,
         )
 
     fsva.launch(server_name="127.0.0.1", server_port=5548)

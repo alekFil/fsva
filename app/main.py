@@ -82,8 +82,8 @@ if __name__ == "__main__":
             with gr.Column():
                 video_output = gr.Video(
                     label="Обработанное видео",
-                    width=640,
-                    height=360,
+                    width=360,
+                    height=640,
                 )
 
         # Настраиваем кнопку запуска, чтобы она выводила GIF в соседний столбец

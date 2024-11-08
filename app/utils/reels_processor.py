@@ -1,6 +1,8 @@
 import os
+import shutil
 import subprocess
 import tempfile
+import time
 from collections import deque
 
 import cv2
@@ -249,6 +251,7 @@ class ReelsProcessor:
         draw_mode="Trajectory",
         progress=None,
     ):
+        print("{Enter to ReelsProcessor}")
         # Применяем интерполяцию для замены нулевых значений в landmarks_tensor
         landmarks_tensor = self.interpolate_landmarks(landmarks_tensor)
 
@@ -268,14 +271,21 @@ class ReelsProcessor:
 
         center_points = []
         hand_points = []
-        frame_count = 0
 
         # Дек для хранения последних координат центральной точки для сглаживания
         recent_centers = deque(maxlen=smooth_window)
 
-        for start_frame, end_frame in jump_frames:
+        processed_clips = []  # для хранения путей к обработанным клипам
+
+        for idx, (start_frame, end_frame) in enumerate(jump_frames):
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             # print(f"{landmarks_tensor.shape=}")
+            frames_dir = os.path.join(self.temp_dir, f"jump_clip_{idx}")
+            os.makedirs(frames_dir, exist_ok=True)
+
+            # Сбрасываем счётчик для новой папки
+            frame_count = 0
+
             for frame_idx in tqdm(
                 range(start_frame, end_frame + 1),
                 desc="Отрисовка видео",
@@ -400,45 +410,56 @@ class ReelsProcessor:
 
                     # Выполняем кроп кадра
                     cropped_frame = frame[y1:y2, x1:x2]
+                    output_frame = cropped_frame
 
                 # Сохраняем кропнутый кадр в виде изображения
-                frame_path = os.path.join(self.temp_dir, f"frame_{frame_count:05d}.png")
-                cv2.imwrite(frame_path, output_frame)
+                frame_path = os.path.join(frames_dir, f"frame_{frame_count:05d}.png")
+                # cv2.imwrite(frame_path, output_frame)
+                if not cv2.imwrite(frame_path, output_frame):
+                    print(f"Не удалось сохранить кадр {frame_count} в {frame_path}")
+                else:
+                    print(f"Кадр {frame_count} сохранен в {frame_path}")
                 frame_count += 1
+
+            time.sleep(1)
+            # Создание видео из кропнутых кадров с помощью ffmpeg
+            clip_path = os.path.join(self.temp_dir, f"jump_clip_{idx}.mp4")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-framerate",
+                    str(self.video_fps),
+                    "-i",
+                    os.path.join(frames_dir, "frame_%05d.png"),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    clip_path,
+                ]
+            )
+
+            # Применяем fade к фрагменту
+            faded_clip_path = os.path.join(self.temp_dir, f"jump_clip_faded_{idx}.mp4")
+            self.apply_fade_effect(
+                clip_path,
+                faded_clip_path,
+                fade_in_duration=0.5,
+                fade_out_duration=0.5,
+            )
+            processed_clips.append(faded_clip_path)
 
         cap.release()
 
-        # Создание видео из кропнутых кадров с помощью ffmpeg
-        output_video_path = "processed_video_with_crop.mp4"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(self.video_fps),
-                "-i",
-                os.path.join(self.temp_dir, "frame_%05d.png"),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                output_video_path,
-            ]
-        )
-
-        # Применяем fade-in и fade-out к финальному видео
-        faded_output_path = "processed_video_with_fade.mp4"
-        self.apply_fade_effect(
-            output_video_path,
-            faded_output_path,
-            fade_in_duration=1,
-            fade_out_duration=1,
-        )
+        # Объединяем все фрагменты в итоговое видео
+        final_output_path = os.path.join("processed_video_with_fades.mp4")
+        self.concat_clips(processed_clips, final_output_path)
 
         # Очистка временных файлов
         self.cleanup_temp_files()
 
-        return faded_output_path
+        return final_output_path
 
     def cut_video_segment(self, start_time, end_time, output_path):
         command = [
@@ -517,31 +538,28 @@ class ReelsProcessor:
             for clip in clips:
                 f.write(f"file '{clip}'\n")
 
-        command = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            "filelist.txt",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-strict",
-            "experimental",
-            output_path,
-        ]
-        subprocess.run(command, check=True)
-
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                "filelist.txt",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-strict",
+                "experimental",
+                output_path,
+            ]
+        )
         os.remove("filelist.txt")
 
     def cleanup_temp_files(self):
-        for filename in os.listdir(self.temp_dir):
-            file_path = os.path.join(self.temp_dir, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-        os.rmdir(self.temp_dir)
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
         self.temp_files.clear()

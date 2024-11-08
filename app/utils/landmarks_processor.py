@@ -127,16 +127,19 @@ class LandmarksProcessor:
 
             return (landmarks_data, world_landmarks_data, masks_data)
 
-    def process_video(self, video_path, fps, step=1):
+    def process_video(self, video_path, step=1):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             print("Ошибка: Не удалось открыть видео.")
             return None, None, None
 
+        fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"{total_frames=}")
         total_processed_frames = total_frames // step
         batch_size = 50
         frames_batch = []
+        check_ids = []
 
         # Добавляем прогресс-бар с общим количеством кадров
         with tqdm(total=total_processed_frames, desc="Обработка видео") as pbar:
@@ -151,14 +154,18 @@ class LandmarksProcessor:
                 if frame_idx % step == 0:
                     frames_batch.append(frame)
                     processed_frame_count += 1
+                    check_ids.append(frame_idx)
 
                 if len(frames_batch) == batch_size:
-                    for frame in frames_batch:
-                        timestamp_ms = int((frame_idx / fps) * 1000)
+                    for i, frame in enumerate(frames_batch):
+                        timestamp_ms = int(
+                            ((frame_idx - len(frames_batch) + i + 1) / fps) * 1000
+                        )
                         self.process_frame(frame, timestamp_ms)
-                        frame_idx += 1
-                        pbar.update(1)  # Обновляем прогресс-бар после каждого кадра
+                        pbar.update(1)
                     frames_batch.clear()
+                    print(f"{check_ids=}")
+                    check_ids = []
                 frame_idx += 1
 
             # Обрабатываем оставшиеся кадры в конце
@@ -166,8 +173,10 @@ class LandmarksProcessor:
                 for frame in frames_batch:
                     timestamp_ms = int((frame_idx / fps) * 1000)
                     self.process_frame(frame, timestamp_ms)
+                    check_ids.append(frame_idx)
                     frame_idx += 1
                     pbar.update(1)  # Обновляем прогресс-бар
+                print(f"{check_ids=}")
 
         cap.release()
         landmarks_data, world_landmarks_data, masks_data = self.return_data()

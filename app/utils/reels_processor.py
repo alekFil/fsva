@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 
 class ReelsProcessor:
-    def __init__(self, input_video, video_fps=25, step=1):
+    def __init__(self, input_video, step=1):
         """
         Инициализация процессора видео.
 
@@ -18,7 +18,7 @@ class ReelsProcessor:
         - video_fps: Частота кадров видео (по умолчанию 25).
         """
         self.input_video = input_video
-        self.video_fps = video_fps
+        self.video_fps = self._get_video_fps()
         self.temp_files = []
         self.temp_dir = tempfile.mkdtemp()  # Временная директория для кадров
         self.step = step
@@ -59,6 +59,18 @@ class ReelsProcessor:
             (29, 31),
             (31, 27),
         ]
+
+    def _get_video_fps(self):
+        """
+        Получает частоту кадров видео.
+        """
+        cap = cv2.VideoCapture(self.input_video)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        if fps == 0:
+            raise ValueError("Не удалось определить FPS видео")
+        print(f"Частота кадров (FPS) видео: {fps}")
+        return fps
 
     def interpolate_landmarks(self, landmarks_tensor):
         """
@@ -243,6 +255,8 @@ class ReelsProcessor:
         cap = cv2.VideoCapture(self.input_video)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frames_check = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"{frames_check=}")
 
         # Устанавливаем размеры для кропа с соотношением 9:16 и делаем их четными
         crop_width = min(width, int(height * (9 / 16))) + 2 * padding
@@ -261,96 +275,131 @@ class ReelsProcessor:
 
         for start_frame, end_frame in jump_frames:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
+            # print(f"{landmarks_tensor.shape=}")
             for frame_idx in tqdm(
                 range(start_frame, end_frame + 1),
                 desc="Отрисовка видео",
             ):
+                # print(f"{frame_idx=}")
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # Получаем исходные координаты центральной точки из landmarks_tensor
-                original_center_x = int(
-                    (
-                        landmarks_tensor[frame_idx // self.step, 23, 0]
-                        + landmarks_tensor[frame_idx // self.step, 24, 0]
+                # Определяем, использовать ли реальные координаты из landmarks_tensor или усредненные
+                if (frame_idx - start_frame) % self.step == 0:
+                    # print(f"STEP FRAME - {frame_idx=}")
+                    # print(f"LM IDX - {frame_idx // self.step=}")
+                    # Индекс landmarks_tensor для текущего кадра
+                    # Получаем исходные координаты центральной точки из landmarks_tensor
+                    original_center_x = int(
+                        (
+                            landmarks_tensor[frame_idx // self.step, 23, 0]
+                            + landmarks_tensor[frame_idx // self.step, 24, 0]
+                        )
+                        / 2
+                        * width
                     )
-                    / 2
-                    * width
-                )
-                original_center_y = int(
-                    (
-                        landmarks_tensor[frame_idx // self.step, 23, 1]
-                        + landmarks_tensor[frame_idx // self.step, 24, 1]
+                    original_center_y = int(
+                        (
+                            landmarks_tensor[frame_idx // self.step, 23, 1]
+                            + landmarks_tensor[frame_idx // self.step, 24, 1]
+                        )
+                        / 2
+                        * height
                     )
-                    / 2
-                    * height
-                )
-                center_points.append((original_center_x, original_center_y))
+                    center_points.append((original_center_x, original_center_y))
 
-                # Добавляем координаты центральной точки в очередь для сглаживания
-                recent_centers.append((original_center_x, original_center_y))
+                    # Добавляем координаты центральной точки в очередь для сглаживания
+                    recent_centers.append((original_center_x, original_center_y))
 
-                # Вычисляем усредненные координаты центра для сглаживания
-                avg_center_x = int(np.mean([pt[0] for pt in recent_centers]))
-                avg_center_y = int(np.mean([pt[1] for pt in recent_centers]))
+                    # Вычисляем усредненные координаты центра для сглаживания
+                    avg_center_x = int(np.mean([pt[0] for pt in recent_centers]))
+                    avg_center_y = int(np.mean([pt[1] for pt in recent_centers]))
 
-                # Рассчитываем координаты для обрезки вокруг усредненного центра
-                x1 = max(0, min(avg_center_x - crop_width // 2, width - crop_width))
-                y1 = max(0, min(avg_center_y - crop_height // 2, height - crop_height))
-                x2 = x1 + crop_width
-                y2 = y1 + crop_height
-
-                # Выполняем кроп кадра
-                cropped_frame = frame[y1:y2, x1:x2]
-
-                # Обновляем список центральных точек для кропнутого кадра
-                cropped_center_points = [(x - x1, y - y1) for x, y in center_points]
-
-                # Получаем исходные координаты руки и корректируем их относительно кропа
-                original_hand_x = int(
-                    landmarks_tensor[frame_idx // self.step, 0, 0] * width
-                )
-                original_hand_y = int(
-                    landmarks_tensor[frame_idx // self.step, 0, 1] * height
-                )
-                hand_points.append((original_hand_x, original_hand_y))
-
-                # Обновляем список точек руки для кропнутого кадра
-                cropped_hand_points = [(x - x1, y - y1) for x, y in hand_points]
-
-                if draw_mode == "Trajectory":
-                    # Рисуем центральную точку и траекторию на кропнутом кадре
-                    cropped_frame = self.draw_trajectory(
-                        cropped_frame,
-                        cropped_center_points,
-                        point_color=(102, 153, 0),
-                        line_color=(102, 153, 0),
+                    # Рассчитываем координаты для обрезки вокруг усредненного центра
+                    x1 = max(0, min(avg_center_x - crop_width // 2, width - crop_width))
+                    y1 = max(
+                        0,
+                        min(avg_center_y - crop_height // 2, height - crop_height),
                     )
+                    x2 = x1 + crop_width
+                    y2 = y1 + crop_height
 
-                    # Рисуем траекторию руки на кропнутом кадре
-                    cropped_frame = self.draw_trajectory(
-                        cropped_frame,
-                        cropped_hand_points,
-                        point_color=(0, 102, 153),
-                        line_color=(0, 102, 153),
-                    )
-                elif draw_mode == "Skeleton":
-                    # Пересчитываем координаты суставов для кропнутого кадра
-                    joints = landmarks_tensor[frame_idx // self.step, :, :2] * np.array(
-                        [width, height]
-                    )
-                    cropped_joints = np.array(
-                        [(int(x - x1), int(y - y1)) for x, y in joints]
-                    )
-                    cropped_frame = self.draw_skeleton(cropped_frame, cropped_joints)
+                    # Выполняем кроп кадра
+                    cropped_frame = frame[y1:y2, x1:x2]
 
-                # Вписываем обрезанный кадр в размытую версию
-                if padding != 0:
-                    output_frame = self.fit_to_aspect_ratio_9_16(frame, cropped_frame)
+                    # Обновляем список центральных точек для кропнутого кадра
+                    cropped_center_points = [(x - x1, y - y1) for x, y in center_points]
+
+                    # Получаем исходные координаты руки и корректируем их относительно кропа
+                    original_hand_x = int(
+                        landmarks_tensor[frame_idx // self.step, 0, 0] * width
+                    )
+                    original_hand_y = int(
+                        landmarks_tensor[frame_idx // self.step, 0, 1] * height
+                    )
+                    hand_points.append((original_hand_x, original_hand_y))
+
+                    # Обновляем список точек руки для кропнутого кадра
+                    cropped_hand_points = [(x - x1, y - y1) for x, y in hand_points]
+
+                    if draw_mode == "Trajectory":
+                        # Рисуем центральную точку и траекторию на кропнутом кадре
+                        cropped_frame = self.draw_trajectory(
+                            cropped_frame,
+                            cropped_center_points,
+                            point_color=(102, 153, 0),
+                            line_color=(102, 153, 0),
+                        )
+
+                        # Рисуем траекторию руки на кропнутом кадре
+                        cropped_frame = self.draw_trajectory(
+                            cropped_frame,
+                            cropped_hand_points,
+                            point_color=(0, 102, 153),
+                            line_color=(0, 102, 153),
+                        )
+                    elif draw_mode == "Skeleton":
+                        # Пересчитываем координаты суставов для кропнутого кадра
+                        joints = landmarks_tensor[
+                            frame_idx // self.step, :, :2
+                        ] * np.array([width, height])
+                        cropped_joints = np.array(
+                            [(int(x - x1), int(y - y1)) for x, y in joints]
+                        )
+                        cropped_frame = self.draw_skeleton(
+                            cropped_frame, cropped_joints
+                        )
+
+                    # Вписываем обрезанный кадр в размытую версию
+                    if padding != 0:
+                        output_frame = self.fit_to_aspect_ratio_9_16(
+                            frame, cropped_frame
+                        )
+                    else:
+                        output_frame = cropped_frame
+
+                # Если кадр не кратен step, используем усредненные координаты из recent_centers
                 else:
-                    output_frame = cropped_frame
+                    if recent_centers:
+                        avg_center_x = int(np.mean([pt[0] for pt in recent_centers]))
+                        avg_center_y = int(np.mean([pt[1] for pt in recent_centers]))
+                    else:
+                        avg_center_x, avg_center_y = (
+                            width // 2,
+                            height // 2,
+                        )  # центральная точка по умолчанию
+
+                    # Рассчитываем координаты для обрезки вокруг усредненного центра
+                    x1 = max(0, min(avg_center_x - crop_width // 2, width - crop_width))
+                    y1 = max(
+                        0, min(avg_center_y - crop_height // 2, height - crop_height)
+                    )
+                    x2 = x1 + crop_width
+                    y2 = y1 + crop_height
+
+                    # Выполняем кроп кадра
+                    cropped_frame = frame[y1:y2, x1:x2]
 
                 # Сохраняем кропнутый кадр в виде изображения
                 frame_path = os.path.join(self.temp_dir, f"frame_{frame_count:05d}.png")

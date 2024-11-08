@@ -84,7 +84,7 @@ def process_video_inference(
         landmarks_data, world_landmarks_data, figure_masks_data = LandmarksProcessor(
             model_path,
             "0",
-        ).process_video(temp_video_path, 25, step=step)
+        ).process_video(temp_video_path, step=step)
 
         # Сохраняем landmarks_data в кэш
         save_cached_landmarks(video_hash, landmarks_data)
@@ -103,7 +103,7 @@ def process_video_inference(
         # Возвращаем ошибку, если диапазон некорректен
         return str(e)
 
-    reels_processor = ReelsProcessor(temp_video_path, video_fps=24, step=step)
+    reels_processor = ReelsProcessor(temp_video_path, step=step)
     processed_video = reels_processor.process_jumps(
         [(start_frame, end_frame)],
         landmarks_data,

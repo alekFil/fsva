@@ -6,8 +6,8 @@ import shutil
 import tempfile
 
 import gradio as gr
-import numpy as np
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from utils.inferences.inference_elements import ModelInferenceService
 from utils.landmarks_processor import LandmarksProcessor
 from utils.reels_processor import ReelsProcessor
@@ -22,6 +22,58 @@ model_path = "app\models\elements\checkpoints\checkpoint.pt"
 parameters = (64, 2, 0.3, 198, 0.05, 128, True, True, True, 0.05)
 num_classes = 3
 inference_service = ModelInferenceService(model_path, parameters, num_classes)
+
+
+def find_reels_fragments(labels, target_class, batch_size):
+    fragments = []
+
+    # Параметры для поиска последовательностей
+    start = None
+    count = 0
+
+    for i, label in enumerate(labels):
+        if label == target_class:
+            if start is None:
+                start = i
+            count += 1
+        else:
+            if start is not None and count >= 1:
+                # Определяем индекс среднего элемента
+                middle_index = start + count // 2
+
+                # Определяем, к какому батчу относится средний элемент
+                batch_index = middle_index // batch_size
+
+                # Определяем начало и конец соседних батчей
+                start_batch = max(0, (batch_index - 1) * batch_size)
+                end_batch = min(len(labels) - 1, (batch_index + 2) * batch_size - 1)
+
+                # Объединяем с предыдущим фрагментом, если они пересекаются
+                if fragments and start_batch <= fragments[-1][1]:
+                    # Обновляем конец последнего фрагмента
+                    fragments[-1] = (fragments[-1][0], max(fragments[-1][1], end_batch))
+                else:
+                    # Добавляем новый фрагмент
+                    fragments.append((start_batch, end_batch))
+
+            # Сброс параметров
+            start = None
+            count = 0
+
+    # Проверка для последней последовательности
+    if start is not None and count >= 3:
+        middle_index = start + count // 2
+        batch_index = middle_index // batch_size
+        start_batch = max(0, (batch_index - 1) * batch_size)
+        end_batch = min(len(labels) - 1, (batch_index + 2) * batch_size - 1)
+
+        # Объединяем с предыдущим фрагментом, если они пересекаются
+        if fragments and start_batch <= fragments[-1][1]:
+            fragments[-1] = (fragments[-1][0], max(fragments[-1][1], end_batch))
+        else:
+            fragments.append((start_batch, end_batch))
+
+    return fragments
 
 
 def generate_video_hash(video_path, step, model_path):
@@ -76,39 +128,69 @@ def predict(landmarks_data, world_landmarks_data):
     world_landmarks_tensor = torch.tensor(world_landmarks_data)
     print(f"{landmarks_tensor.shape=}")
     print(f"{world_landmarks_tensor.shape=}")
-    features = torch.cat([world_landmarks_tensor, landmarks_tensor], dim=2)
-    features = features.view(features.size(0), -1)  # Shape: [1841, 198]
-    print(f"{features.shape=}")
 
-    total_elements = features.size(0)
+    def collate_ml(batch):
+        (
+            lengths,
+            swfeatures,
+            sfeatures,
+        ) = zip(*batch)
+
+        lengths = torch.tensor(lengths).flatten()
+
+        swfeatures = pad_sequence(swfeatures, batch_first=True)
+        swfeatures = swfeatures.view(swfeatures.shape[0], swfeatures.shape[1], -1)
+
+        sfeatures = pad_sequence(sfeatures, batch_first=True)
+        sfeatures = sfeatures.view(sfeatures.shape[0], sfeatures.shape[1], -1)
+
+        features = torch.cat(
+            [
+                swfeatures,
+                sfeatures,
+            ],
+            dim=2,
+        )
+
+        return lengths, features
+
+    # Определим длину каждой последовательности и необходимое количество батчей
     sequence_length = 25
-    num_full_sequences = total_elements // sequence_length
-    last_sequence_length = total_elements % sequence_length
-    total_sequences = (
-        num_full_sequences + 1 if last_sequence_length > 0 else num_full_sequences
-    )
+    num_sequences = (
+        landmarks_tensor.shape[0] + sequence_length - 1
+    ) // sequence_length  # Округление вверх
 
-    features_prepared = torch.zeros(
-        total_sequences, sequence_length, features.size(1)
-    )  # Shape: [88, 25, 198]
+    # Разделим данные на последовательности по 25 элементов
+    sequences = []
 
-    for i in range(num_full_sequences):
-        features_prepared[i] = features[i * sequence_length : (i + 1) * sequence_length]
-    if last_sequence_length > 0:
-        last_sequence_data = features[num_full_sequences * sequence_length :]
-        features_prepared[-1, :last_sequence_length] = last_sequence_data
+    for i in range(num_sequences):
+        start_idx = i * sequence_length
+        end_idx = min(start_idx + sequence_length, landmarks_tensor.shape[0])
 
-    lengths = [sequence_length] * num_full_sequences
-    if last_sequence_length > 0:
-        lengths.append(last_sequence_length)
-    lengths = torch.tensor(np.array(lengths))
+        # Получаем последовательность и вычисляем её истинную длину
+        seq_landmarks = landmarks_tensor[start_idx:end_idx]
+        seq_world_landmarks = world_landmarks_tensor[start_idx:end_idx]
+        true_length = seq_landmarks.shape[0]
 
-    print(f"{features_prepared.shape=}")
-    print(f"{lengths.shape=}")
-    print(f"{lengths=}")
+        # Дополняем последовательности нулями до длины 25, если они короче
+        if true_length < sequence_length:
+            padding = torch.zeros(sequence_length - true_length, 33, 3)
+            seq_landmarks = torch.cat([seq_landmarks, padding], dim=0)
+            seq_world_landmarks = torch.cat([seq_world_landmarks, padding], dim=0)
 
-    labels_batch, lengths_batch, validation_mask_batch, swfeatures_batch = check_data
-    # lengths_batch, swfeatures_batch = lengths.clone(), features_prepared.clone()
+        # Добавляем последовательности и их длины в список
+        sequences.append((true_length, seq_world_landmarks, seq_landmarks))
+
+    lengths_tensor, features = collate_ml(sequences)
+
+    print(f"{features.shape=}")
+    print(f"{lengths_tensor.shape=}")
+    print(f"{lengths_tensor=}")
+
+    print(f"{features[0]=}")
+
+    # labels_batch, lengths_batch, validation_mask_batch, swfeatures_batch = check_data
+    lengths_batch, swfeatures_batch = lengths_tensor.clone(), features.clone()
     print(f"{lengths_batch.shape=}")
     print(f"{swfeatures_batch.shape=}")
     print(f"{swfeatures_batch[0]=}")
@@ -191,11 +273,13 @@ def process_video_inference(
     print(f"{predicted_labels[405:420]=}")
     # print(predicted_labels)
 
-    return "processed_video_with_fades.mp4"
+    reels_fragments = find_reels_fragments(predicted_labels, 1, 25)
+    print(reels_fragments)
+    reels = [(x * 3, y * 3) for x, y in reels_fragments]
 
     reels_processor = ReelsProcessor(temp_video_path, step=step)
     processed_video = reels_processor.process_jumps(
-        frame_ranges,
+        tuple(reels),
         landmarks_data,
         padding=padding,
         draw_mode=draw_mode,

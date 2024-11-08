@@ -11,3 +11,5 @@ processed_video_with_fade.mp4
 landmarks_cache/
 .vscode/
 processed_video_with_fades.mp4
+app/models/elements/checkpoints/check_data.pt
+app/models/elements/checkpoints/check_v38.pt

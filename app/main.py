@@ -49,8 +49,7 @@ def save_cached_landmarks(video_hash, landmarks_data):
 
 def process_video_inference(
     video_file,
-    start_frame,
-    end_frame,
+    frame_ranges_str,
     padding,
     draw_mode,
     step,
@@ -93,19 +92,25 @@ def process_video_inference(
 
     print(f"{landmarks_data.shape=}")
 
-    # Проверяем диапазон кадров и конвертируем его
+    # Обрабатываем строку с диапазонами кадров
     try:
-        start_frame = int(start_frame)
-        end_frame = int(end_frame)
-        if start_frame >= end_frame:
-            raise ValueError("Начальный кадр должен быть меньше конечного")
+        # Преобразуем строку в список кортежей
+        frame_ranges = [
+            tuple(map(int, item.strip().replace("(", "").replace(")", "").split(",")))
+            for item in frame_ranges_str.split("),")
+        ]
+        # Проверка, что начальный кадр меньше конечного в каждом диапазоне
+        for start, end in frame_ranges:
+            if start >= end:
+                raise ValueError(
+                    f"Начальный кадр должен быть меньше конечного: ({start}, {end})"
+                )
     except ValueError as e:
-        # Возвращаем ошибку, если диапазон некорректен
-        return str(e)
+        return f"Ошибка в формате диапазонов: {str(e)}"
 
     reels_processor = ReelsProcessor(temp_video_path, step=step)
     processed_video = reels_processor.process_jumps(
-        [(start_frame, end_frame)],
+        frame_ranges,
         landmarks_data,
         padding=padding,
         draw_mode=draw_mode,
@@ -136,8 +141,12 @@ if __name__ == "__main__":
                     # autoplay=True,
                 )
 
-                start_frame = gr.Number(label="Начальный кадр", value=570)
-                end_frame = gr.Number(label="Конечный кадр", value=630)
+                # Текстовое поле для диапазонов кадров
+                frame_ranges_str = gr.Textbox(
+                    label="Диапазоны кадров",
+                    placeholder="Введите диапазоны в формате (400, 500), (600, 700)",
+                )
+
                 padding = gr.Number(label="Padding (отступ для кропа)", value=0)
 
                 # Поле для параметра step
@@ -186,8 +195,7 @@ if __name__ == "__main__":
             process_video_inference,
             inputs=[
                 video_input,
-                start_frame,
-                end_frame,
+                frame_ranges_str,
                 padding,
                 draw_mode,
                 step,

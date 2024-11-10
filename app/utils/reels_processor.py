@@ -410,7 +410,14 @@ class ReelsProcessor:
 
                     # Выполняем кроп кадра
                     cropped_frame = frame[y1:y2, x1:x2]
-                    output_frame = cropped_frame
+
+                    # Вписываем обрезанный кадр в размытую версию
+                    if padding != 0:
+                        output_frame = self.fit_to_aspect_ratio_9_16(
+                            frame, cropped_frame
+                        )
+                    else:
+                        output_frame = cropped_frame
 
                 # Сохраняем кропнутый кадр в виде изображения
                 frame_path = os.path.join(frames_dir, f"frame_{frame_count:05d}.png")

@@ -13,3 +13,6 @@ landmarks_cache/
 processed_video_with_fades.mp4
 app/models/elements/checkpoints/check_data.pt
 app/models/elements/checkpoints/check_v38.pt
+intermediate_temp.mp4
+whatsapp_ready_video.mp4
+whatsapp_video.mp4

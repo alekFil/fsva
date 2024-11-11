@@ -119,11 +119,6 @@ def save_cached_landmarks(video_hash, landmarks_data, world_landmarks_data):
 
 
 def predict(landmarks_data, world_landmarks_data):
-    # Преобразование входных данных в тензор
-    check_data = torch.load(
-        "app/models/elements/checkpoints/check_v38.pt", weights_only=False
-    )
-
     landmarks_tensor = torch.tensor(landmarks_data)
     world_landmarks_tensor = torch.tensor(world_landmarks_data)
     print(f"{landmarks_tensor.shape=}")
@@ -189,7 +184,6 @@ def predict(landmarks_data, world_landmarks_data):
 
     print(f"{features[0]=}")
 
-    # labels_batch, lengths_batch, validation_mask_batch, swfeatures_batch = check_data
     lengths_batch, swfeatures_batch = lengths_tensor.clone(), features.clone()
     print(f"{lengths_batch.shape=}")
     print(f"{swfeatures_batch.shape=}")
@@ -211,7 +205,6 @@ def predict(landmarks_data, world_landmarks_data):
 
 def process_video_inference(
     video_file,
-    frame_ranges_str,
     padding,
     draw_mode,
     step,
@@ -251,22 +244,6 @@ def process_video_inference(
         save_cached_landmarks(video_hash, landmarks_data, world_landmarks_data)
     else:
         print("Данные landmarks загружены из кэша.")
-
-    # Обрабатываем строку с диапазонами кадров
-    try:
-        # Преобразуем строку в список кортежей
-        frame_ranges = [
-            tuple(map(int, item.strip().replace("(", "").replace(")", "").split(",")))
-            for item in frame_ranges_str.split("),")
-        ]
-        # Проверка, что начальный кадр меньше конечного в каждом диапазоне
-        for start, end in frame_ranges:
-            if start >= end:
-                raise ValueError(
-                    f"Начальный кадр должен быть меньше конечного: ({start}, {end})"
-                )
-    except ValueError as e:
-        return f"Ошибка в формате диапазонов: {str(e)}"
 
     # Здесь нужно получить фрагменты из предсказательной модели
     predicted_labels, _ = predict(landmarks_data, world_landmarks_data)
@@ -310,18 +287,12 @@ if __name__ == "__main__":
                     # autoplay=True,
                 )
 
-                # Текстовое поле для диапазонов кадров
-                frame_ranges_str = gr.Textbox(
-                    label="Диапазоны кадров",
-                    placeholder="Введите диапазоны в формате (400, 500), (600, 700)",
-                )
-
                 padding = gr.Number(label="Padding (отступ для кропа)", value=0)
 
                 # Поле для параметра step
                 step = gr.Number(
                     label="Step (шаг пропуска кадров)",
-                    value=1,
+                    value=3,
                     minimum=1,
                 )
 
@@ -329,7 +300,7 @@ if __name__ == "__main__":
                 model_choice = gr.Radio(
                     label="Выберите модель",
                     choices=["Lite", "Full", "Heavy"],
-                    value="Heavy",
+                    value="Lite",
                 )
 
                 # Переключатель режима отрисовки
@@ -364,7 +335,6 @@ if __name__ == "__main__":
             process_video_inference,
             inputs=[
                 video_input,
-                frame_ranges_str,
                 padding,
                 draw_mode,
                 step,
